@@ -164,6 +164,20 @@ body.kb .overlay{bottom:0}
 .ghead{display:flex;align-items:center;gap:10px;padding:10px 0 8px;border-bottom:1px solid var(--line)}
 .ghead-name{font-weight:800;font-size:15px}
 .ghead .gh-right{margin-left:auto;display:flex;gap:6px;align-items:center}
+.gtoggle{width:100%;border:0;background:none;text-align:left;font:inherit;color:inherit;cursor:pointer;padding:12px 0}
+.group-card.closed .gtoggle{border-bottom:0}
+.gtoggle .gh-info{flex:1;min-width:0}
+.gtoggle .gh-desc{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gtoggle .gh-meta{font-size:12px;font-weight:700;color:var(--accent);margin-top:2px}
+.gtoggle .gh-right{flex:none;display:flex;align-items:center;gap:6px}
+.gtoggle .gh-meta{display:flex!important;align-items:center;flex-wrap:wrap;gap:4px 8px}
+.gh-pick{height:19px;padding:0 7px;font-size:11px;flex:none;width:auto}
+.gtoggle .gchev{width:20px;height:20px;color:var(--muted);transition:transform .2s ease;transform:rotate(90deg)}
+.group-card.open .gchev{transform:rotate(-90deg)}
+.gtoggle:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:10px}
+.gbar{display:flex;align-items:center;justify-content:space-between;font-size:12.5px;color:var(--muted);font-weight:700;padding:0 2px}
+.gbar button{border:0;background:none;color:var(--accent);font-weight:800;font-size:12.5px;padding:6px 0;cursor:pointer}
+@media (prefers-reduced-motion:reduce){.gtoggle .gchev{transition:none}}
 .mrow{display:flex;gap:12px;padding:12px 0;border-bottom:1px solid var(--line);align-items:flex-start}
 .mrow:last-child{border-bottom:0}
 .mrow-info{flex:1;min-width:0}
@@ -537,7 +551,7 @@ var S = {
   cal: { today: '', days: [], sessions: [], nextDayEpoch: 0, ahead: 1, offset: 0 },
   merchants: [], menu: [], merMap: {}, menuMap: {},
   user: { name: '', phone: '' }, orders: [],
-  carts: {},
+  carts: {}, openMer: {},
   tab: 'home', date: '', sess: 'siang', cat: 'Semua', q: '', orderDate: '',
   ov: [], openOrderId: null,
   placing: false, uploading: null, uploadFor: null, loaded: false, lastOpen: '',
@@ -1020,13 +1034,55 @@ function renderMenuList() {
     groups[i.merchantId].push(i);
   });
   var canOrder = orderState(ds, sess).ok;
-  el.innerHTML = '<div class="groups">' + order.map(function (mid) {
-    var m = S.merMap[mid];
-    return '<section class="card group-card" aria-label="' + esc(m.name) + '"><div class="ghead">' + tile(m.emoji, 't40') +
-      '<div><div class="ghead-name">' + esc(m.name) + '</div>' + (m.desc ? '<div class="xs muted">' + esc(m.desc) + '</div>' : '') + '</div></div>' +
-      groups[mid].map(function (i) { return itemRow(i, ds, sess, canOrder, m); }).join('') + '</section>';
+  var single = order.length === 1, searching = !!q;
+  var openFlags = order.map(function (mid) { return isMerOpen(mid, ds, sess, single, searching); });
+  var anyClosed = openFlags.indexOf(false) > -1;
+  var bar = (single || searching) ? '' :
+    '<div class="gbar"><span>' + order.length + ' tenant · ketuk untuk lihat menu</span>' +
+    '<button data-act="merAll" data-open="' + (anyClosed ? '1' : '0') + '">' + (anyClosed ? 'Buka semua' : 'Tutup semua') + '</button></div>';
+  el.innerHTML = '<div class="groups">' + bar + order.map(function (mid, k) {
+    var m = S.merMap[mid], list = groups[mid], open = openFlags[k];
+    var minP = Math.min.apply(null, list.map(function (i) { return i.price; }));
+    var inCart = merCartCount(mid, ds, sess);
+    var gid = 'g-' + String(mid).replace(/[^\w-]/g, '');
+    var right = (!m.open ? '<span class="badge mute">Tutup</span>' : '') +
+      '<svg class="gchev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>';
+    return '<section class="card group-card ' + (open ? 'open' : 'closed') + '" data-mid="' + esc(mid) + '">' +
+      '<button class="ghead gtoggle"' + (searching ? '' : ' data-act="toggleMer"') + ' data-mid="' + esc(mid) + '" aria-expanded="' + open + '" aria-controls="' + gid + '">' + tile(m.emoji, 't40') +
+      '<span class="gh-info"><span class="ghead-name" style="display:block">' + esc(m.name) + '</span>' +
+      (m.desc ? '<span class="xs muted gh-desc" style="display:block">' + esc(m.desc) + '</span>' : '') +
+      '<span class="gh-meta" style="display:block">' + list.length + ' menu · mulai ' + rp(minP) + (inCart ? ' <span class="badge due gh-pick">' + inCart + ' dipilih</span>' : '') + '</span></span>' +
+      '<span class="gh-right">' + right + '</span></button>' +
+      '<div id="' + gid + '"' + (open ? '' : ' hidden') + '>' + (open ? list.map(function (i) { return itemRow(i, ds, sess, canOrder, m); }).join('') : '') + '</div></section>';
   }).join('') + '</div>';
 }
+/* tenant dibuka/ditutup: tersimpan per sesi browser */
+function loadOpen() { try { var o = JSON.parse(ssGet('tdp_open') || '{}'); return o && typeof o === 'object' ? o : {}; } catch (e) { return {}; } }
+function saveOpen() { ssSet('tdp_open', JSON.stringify(S.openMer)); }
+function merCartCount(mid, ds, sess) {
+  return cartLines(ds, sess).reduce(function (n, l) { var it = S.menuMap[l.id]; return n + (it && it.merchantId === mid ? l.qty : 0); }, 0);
+}
+// Aturan: saat mencari semua terbuka; pilihan pengguna dihormati; selain itu terbuka jika
+// hanya ada 1 tenant atau tenant itu sudah ada di keranjang, sisanya tertutup.
+function isMerOpen(mid, ds, sess, single, searching) {
+  if (searching) return true;
+  if (S.openMer.hasOwnProperty(mid)) return !!S.openMer[mid];
+  return single || merCartCount(mid, ds, sess) > 0;
+}
+function toggleMer(mid) {
+  var ds = S.date, sess = S.sess;
+  var btn = document.querySelector('.gtoggle[data-mid="' + cssEsc(mid) + '"]');
+  var now = btn ? btn.getAttribute('aria-expanded') === 'true' : isMerOpen(mid, ds, sess, false, false);
+  S.openMer[mid] = !now; saveOpen();
+  renderMenuList();
+  var h = document.querySelector('.group-card[data-mid="' + cssEsc(mid) + '"]');
+  if (h && now && h.getBoundingClientRect().top < 70) h.scrollIntoView({ block: 'start', behavior: 'smooth' });
+}
+function setAllMer(open) {
+  itemsFor(S.date, S.sess).forEach(function (i) { S.openMer[i.merchantId] = open; });
+  saveOpen(); renderMenuList();
+}
+function cssEsc(s) { return String(s).replace(/["\\]/g, '\\$&'); }
 function itemRow(i, ds, sess, canOrder, m) {
   var n = qtyOf(ds, sess, i.id), off = !i.available || !m.open, ctl = '';
   if (!i.available) ctl = '<button class="btn-add" disabled>Habis</button>';
@@ -1820,6 +1876,7 @@ function applyBoot(r, first) {
   S.form.name = S.form.name || S.user.name; S.form.phone = S.form.phone || S.user.phone;
   if (first || S.cal.days.indexOf(S.date) < 0 || sesKeys().indexOf(S.sess) < 0) {
     var savedD = ssGet('santap_date'), savedS = ssGet('tdp_sess');
+    S.openMer = loadOpen();
     if (savedD && S.cal.days.indexOf(savedD) > -1 && sesKeys().indexOf(savedS) > -1) { S.date = savedD; S.sess = savedS; }
     else { var fo = firstOpen(); S.date = fo.date; S.sess = fo.sess; }
   }
@@ -1918,6 +1975,8 @@ document.addEventListener('click', function (e) {
     case 'ses': setSess(el.getAttribute('data-s')); break;
     case 'goOpen': var fo = firstOpen(); S.date = fo.date; S.sess = fo.sess; ssSet('santap_date', fo.date); ssSet('tdp_sess', fo.sess); renderHome(); updateCartBar(); break;
     case 'cat': S.cat = el.getAttribute('data-cat'); renderChips(); renderMenuList(); break;
+    case 'toggleMer': toggleMer(el.getAttribute('data-mid')); break;
+    case 'merAll': setAllMer(el.getAttribute('data-open') === '1'); break;
     case 'inc': changeQty(id, 1); break;
     case 'dec': changeQty(id, -1); break;
     case 'openCart': openCheckout(); break;
