@@ -205,10 +205,17 @@ select.input{appearance:auto}
 .group{margin-bottom:18px}
 .group>h3{margin:0 0 8px;font-size:14px;font-weight:800}
 .line{display:flex;justify-content:space-between;gap:12px;padding:5px 0;font-size:14px}
-.line span:last-child{font-variant-numeric:tabular-nums;white-space:nowrap}
+.line>span:first-child{min-width:0}
+.line>span:last-child{font-variant-numeric:tabular-nums;white-space:nowrap}
 .line.total{border-top:1px dashed var(--line);margin-top:6px;padding-top:10px;font-weight:800;font-size:16px}
 .crow{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--line)}
 .crow:last-child{border-bottom:0}
+.citem{border-bottom:1px solid var(--line);padding-bottom:10px}
+.citem:last-child{border-bottom:0}
+.citem .crow{border-bottom:0;padding-bottom:6px}
+.input.inote{font-size:13px;padding:8px 12px;min-height:0;height:auto}
+.inote-show{display:block;font-style:italic}
+.shop-notes{margin:-2px 0 8px 18px;line-height:1.45}
 .crow-info{flex:1;min-width:0}
 .crow-name{font-weight:700}
 .when{display:flex;align-items:center;gap:12px;padding:12px 14px}
@@ -615,6 +622,8 @@ function canAdd(item, ds, sess) { return orderState(ds, sess).ok && canAddIgnori
 
 /* ===== KERANJANG (per tanggal + sesi) ===== */
 function ck(ds, sess) { return ds + '|' + sess; }
+var NOTE_MAX = 100;
+function cleanNote(s) { return String(s || '').replace(/[\u0000-\u001f\u007f]+/g, ' ').slice(0, NOTE_MAX); }
 function saveCarts() { lsSet('tdp_carts_v5', JSON.stringify(S.carts)); }
 function loadCarts() {
   try { var c = JSON.parse(lsGet('tdp_carts_v5') || '{}'); if (c && typeof c === 'object') S.carts = c; } catch (e) {}
@@ -627,7 +636,7 @@ function sanitizeCarts() {
     var lines = (S.carts[key] || []).filter(function (l) {
       var it = S.menuMap[l.id];
       return it && l.qty >= 1 && canAddIgnoringTime(it, ds, sess);
-    }).map(function (l) { return { id: l.id, qty: Math.min(Math.floor(l.qty), MAX_LINE_QTY) }; });
+    }).map(function (l) { return { id: l.id, qty: Math.min(Math.floor(l.qty), MAX_LINE_QTY), note: cleanNote(l.note) }; });
     if (lines.length) out[key] = lines;
   });
   S.carts = out; saveCarts();
@@ -639,9 +648,14 @@ function setQty(ds, sess, id, qty) {
   var key = ck(ds, sess), lines = (S.carts[key] || []).slice(), idx = -1;
   for (var i = 0; i < lines.length; i++) if (lines[i].id === id) idx = i;
   if (qty <= 0) { if (idx > -1) lines.splice(idx, 1); }
-  else if (idx > -1) lines[idx] = { id: id, qty: qty };
-  else lines.push({ id: id, qty: qty });
+  else if (idx > -1) lines[idx] = { id: id, qty: qty, note: lines[idx].note || '' };
+  else lines.push({ id: id, qty: qty, note: '' });
   if (lines.length) S.carts[key] = lines; else delete S.carts[key];
+  saveCarts();
+}
+function setNote(ds, sess, id, note) {
+  var lines = S.carts[ck(ds, sess)] || [];
+  lines.forEach(function (l) { if (l.id === id) l.note = cleanNote(note); });
   saveCarts();
 }
 function totals(ds, sess) {
@@ -1073,9 +1087,10 @@ function renderCheckout(keepScroll) {
   var t = totals(ds), f = S.form;
   var lines = cartLines(ds).map(function (l) {
     var it = S.menuMap[l.id], m = S.merMap[it.merchantId];
-    return '<div class="crow">' + picHTML(it, 'p44') + '<div class="crow-info"><div class="crow-name">' + esc(it.name) + '</div>' +
+    return '<div class="citem"><div class="crow">' + picHTML(it, 'p44') + '<div class="crow-info"><div class="crow-name">' + esc(it.name) + '</div>' +
       '<div class="xs muted">' + esc(m ? m.name : '') + ' · ' + rp(it.price) + (it.jastip > 0 ? ' + jastip ' + rp(it.jastip) : '') + (it.taxable && S.config.taxOn ? ' · kena pajak' : '') + '</div></div>' +
-      '<div class="stepper"><button data-act="dec" data-id="' + esc(l.id) + '" aria-label="Kurangi ' + esc(it.name) + '">' + ICON.minus + '</button><b>' + l.qty + '</b><button data-act="inc" data-id="' + esc(l.id) + '" aria-label="Tambah ' + esc(it.name) + '">' + ICON.plus + '</button></div></div>';
+      '<div class="stepper"><button data-act="dec" data-id="' + esc(l.id) + '" aria-label="Kurangi ' + esc(it.name) + '">' + ICON.minus + '</button><b>' + l.qty + '</b><button data-act="inc" data-id="' + esc(l.id) + '" aria-label="Tambah ' + esc(it.name) + '">' + ICON.plus + '</button></div></div>' +
+      '<input class="input inote" data-note="' + esc(l.id) + '" maxlength="' + NOTE_MAX + '" autocomplete="off" placeholder="Catatan item (opsional), misal: tidak pedas" aria-label="Catatan untuk ' + esc(it.name) + '" value="' + esc(l.note || '') + '"></div>';
   }).join('');
   var belowMin = S.config.minOrder > 0 && t.sub < S.config.minOrder;
   var s = sesInfo(sess);
@@ -1088,7 +1103,7 @@ function renderCheckout(keepScroll) {
       fieldHTML('fName', 'Nama', '<input class="input" id="fName" data-form="name" autocomplete="name" maxlength="60" value="' + esc(f.name) + '">', 'name') +
       fieldHTML('fPhone', 'Nomor HP', '<input class="input" id="fPhone" data-form="phone" type="tel" inputmode="tel" autocomplete="tel" maxlength="20" placeholder="0812…" value="' + esc(f.phone) + '">', 'phone') +
     '</div></div>' +
-    '<div class="group"><h3>Catatan (opsional)</h3><textarea class="input" id="fNote" data-form="note" maxlength="200" aria-label="Catatan" placeholder="Contoh: sambal dipisah, tidak pakai bawang">' + esc(f.note) + '</textarea></div>' +
+    '<div class="group"><h3>Catatan pesanan (opsional)</h3><textarea class="input" id="fNote" data-form="note" maxlength="200" aria-label="Catatan pesanan" placeholder="Untuk seluruh pesanan, misal: titip di meja resepsionis">' + esc(f.note) + '</textarea></div>' +
     '<div class="group"><h3>Rincian</h3><div class="card box">' + breakdown(t) + '</div></div>' +
     '<div class="banner info">Setelah pesan, bayar lewat QRIS lalu upload bukti bayar. Status langsung Lunas.</div>';
   el.innerHTML = '<div class="ov-head"><button class="icon-btn" data-act="back" aria-label="Kembali">' + ICON.back + '</button><h2>Keranjang · ' + esc(s.label) + '</h2></div>' +
@@ -1120,7 +1135,7 @@ function placeOrder() {
   var f = S.form;
   var payload = {
     date: ds, session: sess,
-    items: cartLines(ds).map(function (l) { return { menuId: l.id, qty: l.qty }; }),
+    items: cartLines(ds).map(function (l) { return { menuId: l.id, qty: l.qty, note: cleanNote(l.note).trim() }; }),
     name: f.name.trim(), phone: f.phone.replace(/[^\d+]/g, ''), note: f.note.trim(),
     expectedTotal: t.total
   };
@@ -1247,7 +1262,7 @@ function renderOrderDetail() {
   var o = orderById(S.openOrderId); if (!o) return;
   var el = $('#ovOrder'), prev = ($('.ov-body', el) || {}).scrollTop || 0;
   var items = o.items.map(function (i) {
-    return '<div class="line"><span>' + i.qty + '× ' + esc(i.name) + (i.merchantName ? '<span class="jas">' + esc(i.merchantName) + (i.jastip ? ' · jastip ' + rp(i.jastip) + '/porsi' : '') + (i.taxable && o.tax ? ' · kena pajak' : '') + '</span>' : '') + '</span><span>' + rp(i.price * i.qty) + '</span></div>';
+    return '<div class="line"><span>' + i.qty + '× ' + esc(i.name) + (i.merchantName ? '<span class="jas">' + esc(i.merchantName) + (i.jastip ? ' · jastip ' + rp(i.jastip) + '/porsi' : '') + (i.taxable && o.tax ? ' · kena pajak' : '') + '</span>' : '') + (i.note ? '<span class="jas inote-show">Catatan: ' + esc(i.note) + '</span>' : '') + '</span><span>' + rp(i.price * i.qty) + '</span></div>';
   }).join('');
   var t = { sub: o.subtotal, jas: o.jastip, n: o.items.reduce(function (n, i) { return n + i.qty; }, 0), tax: o.tax, ship: o.deliveryFee, svc: o.serviceFee, total: o.total };
   var foot = canCancel(o)
@@ -1281,7 +1296,7 @@ function reorder(id) {
   var lines = [], skipped = 0;
   o.items.forEach(function (i) {
     var it = S.menuMap[i.id];
-    if (it && canAdd(it, target, sess)) lines.push({ id: i.id, qty: Math.min(i.qty, MAX_LINE_QTY) }); else skipped++;
+    if (it && canAdd(it, target, sess)) lines.push({ id: i.id, qty: Math.min(i.qty, MAX_LINE_QTY), note: cleanNote(i.note) }); else skipped++;
   });
   if (!lines.length) { toast('Menu pesanan ini tidak ada di menu ' + sesLabel(sess) + ' ' + dayLong(target) + '.', 'err'); return; }
   var apply = function () {
@@ -1521,7 +1536,7 @@ function renderAdmin() {
 }
 function adminCardHTML(o) {
   var busy = S.admin.busy[o.id], id = esc(o.id);
-  var items = o.items.map(function (i) { return '<li>' + i.qty + '× ' + esc(i.name) + (i.merchantName ? ' <span class="muted">· ' + esc(i.merchantName) + '</span>' : '') + '</li>'; }).join('');
+  var items = o.items.map(function (i) { return '<li>' + i.qty + '× ' + esc(i.name) + (i.merchantName ? ' <span class="muted">· ' + esc(i.merchantName) + '</span>' : '') + (i.note ? '<span class="xs inote-show">Catatan: ' + esc(i.note) + '</span>' : '') + '</li>'; }).join('');
   var acts = [];
   if (o.status === 'Belum Bayar') {
     acts.push('<button class="btn btn-sm btn-okc" data-act="payMark" data-id="' + id + '">Tandai lunas</button>');
@@ -1548,7 +1563,8 @@ function shopList(live) {
       var mn = i.merchantName || 'Lainnya';
       if (!mer[mn]) { mer[mn] = { items: {}, keys: [], sum: 0 }; order.push(mn); }
       var g = mer[mn];
-      if (!g.items[i.name]) { g.items[i.name] = { qty: 0, amt: 0 }; g.keys.push(i.name); }
+      if (!g.items[i.name]) { g.items[i.name] = { qty: 0, amt: 0, notes: [] }; g.keys.push(i.name); }
+      if (i.note) g.items[i.name].notes.push(i.qty + '× ' + i.note + (o.name ? ' (' + o.name + ')' : ''));
       g.items[i.name].qty += i.qty; g.items[i.name].amt += i.price * i.qty; g.sum += i.price * i.qty;
     });
   });
@@ -1557,7 +1573,7 @@ function shopList(live) {
     '<div style="display:flex;flex-direction:column;gap:10px">' + order.map(function (mn) {
       var g = mer[mn];
       return '<section class="card shop-card"><h3><span>' + esc(mn) + '</span><span class="num">' + rp(g.sum) + '</span></h3>' +
-        g.keys.map(function (k) { return '<div class="line"><span><b>' + g.items[k].qty + '×</b> ' + esc(k) + '</span><span>' + rp(g.items[k].amt) + '</span></div>'; }).join('') + '</section>';
+        g.keys.map(function (k) { return '<div class="line"><span><b>' + g.items[k].qty + '×</b> ' + esc(k) + '</span><span>' + rp(g.items[k].amt) + '</span></div>' + (g.items[k].notes.length ? '<div class="xs muted shop-notes">' + g.items[k].notes.map(esc).join('<br>') + '</div>' : ''); }).join('') + '</section>';
     }).join('') +
     '<section class="card shop-card"><div class="line"><span>Total belanja makanan</span><span>' + rp(sub) + '</span></div>' +
     (jas ? '<div class="line"><span>Total jastip</span><span>' + rp(jas) + '</span></div>' : '') +
@@ -1996,6 +2012,8 @@ document.addEventListener('input', function (e) {
     delete S.edit.errs[ef];
     var fe = t.closest('.field'); if (fe) { fe.classList.remove('bad'); var er0 = $('.ferr', fe); if (er0) er0.remove(); }
   }
+  var nid = t.getAttribute && t.getAttribute('data-note');
+  if (nid) { setNote(S.date, S.sess, nid, t.value); return; }
   var key = t.getAttribute && t.getAttribute('data-form');
   if (key) {
     S.form[key] = t.value;
